@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>明明机器人 · 三维点云地图</title>
+  <style>
+    *{box-sizing:border-box} body{margin:0;overflow:hidden;background:#030806;color:#d9f5e1;font-family:"Microsoft YaHei",system-ui,sans-serif}
+    canvas{position:fixed;inset:0;width:100vw;height:100vh;cursor:grab} canvas:active{cursor:grabbing}
+    .panel{position:fixed;left:18px;top:18px;width:330px;padding:18px;border:1px solid #205d3b;border-radius:14px;background:rgba(5,18,11,.91);box-shadow:0 12px 40px #0008;backdrop-filter:blur(8px)}
+    h1{font-size:22px;color:#58ee93;margin:0 0 5px}.sub{font-size:13px;color:#84b996;margin-bottom:15px}.stat{display:grid;grid-template-columns:110px 1fr;gap:8px;font-size:14px;margin:10px 0 16px}.value{color:#72eaa1}
+    .row{display:flex;align-items:center;gap:10px;margin:10px 0} button,.file{border:1px solid #278552;background:#0c3320;color:#dffbea;border-radius:7px;padding:7px 11px;font:inherit;cursor:pointer}button:hover,.file:hover{background:#14562f}.file input{display:none}
+    input[type=range]{accent-color:#40d77d;width:130px}.help{margin-top:13px;padding-top:12px;border-top:1px solid #17442b;color:#83ae91;font-size:12px;line-height:1.8}.badge{position:fixed;right:18px;bottom:16px;color:#6aa27d;font-size:12px;background:#06140dca;padding:8px 11px;border-radius:8px}
+    #error{color:#ff9389;white-space:pre-wrap;font-size:13px}
+  </style>
+</head>
+<body>
+  <canvas id="view"></canvas>
+  <section class="panel">
+    <h1>三维激光点云地图</h1>
+    <div class="sub">明明机器人 · 浏览器交互查看器</div>
+    <div class="stat">
+      <span>地图文件</span><span class="value" id="fileName">正在载入…</span>
+      <span>点云数量</span><span class="value" id="pointCount">0</span>
+      <span>地图尺寸</span><span class="value" id="mapSize">--</span>
+      <span>高度范围</span><span class="value" id="heightRange">--</span>
+    </div>
+    <div class="row"><button id="reset">恢复视角</button><button id="rotate">自动旋转：开</button></div>
+    <div class="row"><span>点大小</span><input id="pointSize" type="range" min="1" max="6" step="0.5" value="2.5"><span id="sizeText">2.5</span></div>
+    <div class="row"><label class="file">打开其他PLY<input id="fileInput" type="file" accept=".ply"></label></div>
+    <div id="error"></div>
+    <div class="help">鼠标左键拖动：旋转视角<br>鼠标滚轮：缩放地图<br>点的颜色按高度由蓝绿变为黄橙色</div>
+  </section>
+  <div class="badge">本地网页运行 · 点云数据不会上传网络</div>
+<script>
+const canvas=document.getElementById('view'),ctx=canvas.getContext('2d');
+let points=[],bounds=null,yaw=-0.65,pitch=0.78,zoom=1,drag=false,lastX=0,lastY=0,auto=true,pointRadius=2.5,dirty=true;
+
+function resize(){canvas.width=innerWidth*devicePixelRatio;canvas.height=innerHeight*devicePixelRatio;dirty=true}
+addEventListener('resize',resize);resize();
+
+function parsePLY(text,name){
+  const lines=text.replace(/\r/g,'').split('\n');
+  const end=lines.indexOf('end_header');
+  if(end<0)throw Error('不是有效的ASCII PLY文件：没有找到 end_header');
+  const vertexLine=lines.slice(0,end).find(v=>v.startsWith('element vertex '));
+  if(!vertexLine)throw Error('PLY文件中没有点数据');
+  const count=Number(vertexLine.split(/\s+/)[2]);
+  const next=[];
+  for(let i=end+1;i<lines.length&&next.length<count;i++){
+    const v=lines[i].trim().split(/\s+/).map(Number);
+    if(v.length>=3&&v.slice(0,3).every(Number.isFinite))next.push([v[0],v[1],v[2]]);
+  }
+  if(!next.length)throw Error('没有读取到有效点云');
+  points=next;computeBounds();updateInfo(name);resetView();
+}
+
+function computeBounds(){
+  let min=[Infinity,Infinity,Infinity],max=[-Infinity,-Infinity,-Infinity];
+  for(const p of points)for(let k=0;k<3;k++){min[k]=Math.min(min[k],p[k]);max[k]=Math.max(max[k],p[k])}
+  bounds={min,max,center:min.map((v,k)=>(v+max[k])/2),span:min.map((v,k)=>max[k]-v)};
+}
+function updateInfo(name){
+  document.getElementById('fileName').textContent=name;
+  document.getElementById('pointCount').textContent=points.length.toLocaleString();
+  document.getElementById('mapSize').textContent=`${bounds.span[0].toFixed(1)} × ${bounds.span[1].toFixed(1)} m`;
+  document.getElementById('heightRange').textContent=`${bounds.min[2].toFixed(2)} ～ ${bounds.max[2].toFixed(2)} m`;
+  document.getElementById('error').textContent='';
+}
+function resetView(){yaw=-0.65;pitch=0.78;zoom=1;dirty=true}
+function colorFor(z){
+  const t=Math.max(0,Math.min(1,(z-bounds.min[2])/(bounds.span[2]||1)));
+  if(t<.5){const q=t*2;return `rgb(${30+20*q},${145+90*q},${205-95*q})`}
+  const q=(t-.5)*2;return `rgb(${50+205*q},${235-65*q},${110-65*q})`;
+}
+function render(){
+  if(!dirty&&!auto){requestAnimationFrame(render);return}
+  if(auto&&!drag){yaw+=0.0025;dirty=true}
+  const w=canvas.width,h=canvas.height,dpr=devicePixelRatio;
+  ctx.fillStyle='#030806';ctx.fillRect(0,0,w,h);
+  if(!points.length){requestAnimationFrame(render);return}
+  const cy=Math.cos(yaw),sy=Math.sin(yaw),cp=Math.cos(pitch),sp=Math.sin(pitch);
+  const maxSpan=Math.max(...bounds.span,1),camera=maxSpan*3.2,focal=Math.min(w,h)*1.45;
+  const projected=[];
+  for(const p of points){
+    const x=p[0]-bounds.center[0],y=p[1]-bounds.center[1],z=p[2]-bounds.center[2];
+    const x1=cy*x-sy*y,y1=sy*x+cy*y;
+    const depth=cp*y1-sp*z,z2=sp*y1+cp*z;
+    const factor=zoom*focal/(camera-depth);
+    projected.push([w*.54+x1*factor,h*.52-z2*factor,depth,p[2]]);
+  }
+  projected.sort((a,b)=>a[2]-b[2]);
+  const radius=pointRadius*dpr;
+  for(const p of projected){
+    if(p[0]<0||p[0]>=w||p[1]<0||p[1]>=h)continue;
+    ctx.fillStyle=colorFor(p[3]);ctx.beginPath();ctx.arc(p[0],p[1],radius,0,Math.PI*2);ctx.fill();
+  }
+  dirty=false;requestAnimationFrame(render);
+}
+
+canvas.addEventListener('pointerdown',e=>{drag=true;lastX=e.clientX;lastY=e.clientY;canvas.setPointerCapture(e.pointerId)});
+canvas.addEventListener('pointermove',e=>{if(!drag)return;yaw+=(e.clientX-lastX)*.008;pitch=Math.max(-1.45,Math.min(1.45,pitch+(e.clientY-lastY)*.008));lastX=e.clientX;lastY=e.clientY;dirty=true});
+canvas.addEventListener('pointerup',()=>drag=false);
+canvas.addEventListener('wheel',e=>{e.preventDefault();zoom=Math.max(.15,Math.min(8,zoom*Math.exp(-e.deltaY*.001)));dirty=true},{passive:false});
+document.getElementById('reset').onclick=resetView;
+document.getElementById('rotate').onclick=e=>{auto=!auto;e.target.textContent=`自动旋转：${auto?'开':'关'}`;dirty=true};
+document.getElementById('pointSize').oninput=e=>{pointRadius=Number(e.target.value);document.getElementById('sizeText').textContent=pointRadius.toFixed(1);dirty=true};
+document.getElementById('fileInput').onchange=e=>{const f=e.target.files[0];if(f)f.text().then(t=>parsePLY(t,f.name)).catch(showError)};
+function showError(err){document.getElementById('error').textContent=String(err);}
+
+const params=new URLSearchParams(location.search),file=params.get('file')||'building_3d_map.ply';
+fetch(file).then(r=>{if(!r.ok)throw Error(`无法读取地图：${file}`);return r.text()}).then(t=>parsePLY(t,file)).catch(showError);
+requestAnimationFrame(render);
+</script>
+</body>
+</html>
