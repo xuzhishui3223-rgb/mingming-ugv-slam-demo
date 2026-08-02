@@ -1,5 +1,11 @@
 # Mingming UGV 3D SLAM Point-Cloud Demo
 
+## MuJoCo tracked UGV, control and live 3D LiDAR
+
+![MuJoCo tracked UGV showcase](mujoco_showcase.gif)
+
+## 3D SLAM point-cloud map
+
 ![Rotating 3D SLAM point cloud](pointcloud_demo.gif)
 
 Interactive browser demo for a simulated tracked UGV 3D SLAM map.
