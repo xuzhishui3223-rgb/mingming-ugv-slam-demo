@@ -1,5 +1,7 @@
 # Mingming UGV 3D SLAM Point-Cloud Demo
 
+![Rotating 3D SLAM point cloud](pointcloud_demo.gif)
+
 Interactive browser demo for a simulated tracked UGV 3D SLAM map.
 
 ## Live demo
